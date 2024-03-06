@@ -4,6 +4,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from extract_vtu_data import extract_vtu_data
+from scipy.integrate import solve_ivp
 
 """
 File to evaluate the velocity field of a flow over a flat plate
@@ -44,14 +45,15 @@ y_plus = data['Y_Plus']
 def blasius_derivative(eta):
     return 0.332 * np.sqrt(eta) - 0.4167 * eta + 0.0833 / (1 + eta)**(1.5)
 
-
+def eta(y, x):
+    return y * np.sqrt(U_INF/NU/x)
 ############################################################################################################
 ###  Evaluate the velocity field at specific x location 
 ############################################################################################################
 
 # define the index of x loc for the velocity field extraction 
 
-x_index =  30
+x_index =  64
 if x_index > WIDTH:
     print(f"Index out of range, max index is {WIDTH}")
     sys.exit(1)
@@ -72,33 +74,39 @@ y_val = coordinate[column_start:column_end, 1]
 x_val = coordinate[column_start:column_end, 0]
 # plot the coordinate
 plt.figure()
-plt.plot(x_val, y_val, 'k.')
+plt.plot(x_val, eta(y_val,x_val[1]), 'k.')
 plt.xlabel('X')
-plt.ylabel('Y')
+plt.ylabel('$\eta$')
 plt.title('Flat Plate Mesh Verify')
 plt.show()
 
 # plot the velocity field
 plt.figure()
-plt.plot(u, y_val, 'k.')
+plt.plot(u, eta(y_val,x_val[1]), 'k.')
+
+x_index =  30
+if x_index > WIDTH:
+    print(f"Index out of range, max index is {WIDTH}")
+    sys.exit(1)
+
+
+# interpolate the node index of given x_index
+column_start = x_index * HEIGHT
+column_end = column_start + HEIGHT
+
+# extract the velocity field at the x_index
+# for Blasius boundary layer we are only interested in u
+u = velocity[column_start:column_end, 0]
+v = velocity[column_start:column_end, 1]
+w = velocity[column_start:column_end, 2]
+
+print(f"Extracting data at x = {coordinate[column_start, 0]}")
+y_val = coordinate[column_start:column_end, 1]
+x_val = coordinate[column_start:column_end, 0]
+plt.plot(u, eta(y_val,x_val[1]), 'r.')
+
 plt.xlabel('U')
-plt.ylabel('Y')
+plt.ylabel('$\eta$')
+plt.ylim(0, 9)
 plt.title('Velocity')
-plt.show()
-
-
-# compute Blasius analytical solution
-eta = y_val / np.sqrt(NU * x_val[1]/ U_INF)
-u_blasius = U_INF*blasius_derivative(eta)
-
-
-# Plotting
-plt.figure()
-plt.plot(u, y_val, 'k.', label='Numerical')
-plt.plot(u_blasius, y_val, 'r-', label='Blasius')
-plt.xlabel('U')
-plt.ylabel('Y')
-plt.title('Velocity Profile')
-plt.legend()
-plt.grid(True)
 plt.show()
