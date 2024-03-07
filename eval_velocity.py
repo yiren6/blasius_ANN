@@ -47,6 +47,9 @@ def blasius_derivative(eta):
 
 def eta(y, x):
     return y * np.sqrt(U_INF/NU/x)
+
+def Re(x):
+    return U_INF * x / NU
 ############################################################################################################
 ###  Evaluate the velocity field at specific x location 
 ############################################################################################################
@@ -83,8 +86,8 @@ plt.show()
 # plot the velocity field
 plt.figure()
 plt.plot(u, eta(y_val,x_val[1]), 'k.')
-
-x_index =  30
+print(Re(x_val[1]))
+x_index =  25
 if x_index > WIDTH:
     print(f"Index out of range, max index is {WIDTH}")
     sys.exit(1)
@@ -110,3 +113,7 @@ plt.ylabel('$\eta$')
 plt.ylim(0, 9)
 plt.title('Velocity')
 plt.show()
+
+print(eta(y_val,x_val[1]))
+print(u)
+print(Re(x_val[1]))
