@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import StepLR
+import torch.nn.utils.prune as prune
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -25,6 +26,8 @@ class BoundaryLayerDataset(Dataset):
 class CANN(nn.Module):
     def __init__(self):
         super(CANN, self).__init__()
+        self.alpha = 1e-2  # L1 regularization coefficient
+        self.prune_threshold = 1e-5  # Threshold for pruning weights
         # access the current CUDA enviroment 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
@@ -38,6 +41,35 @@ class CANN(nn.Module):
 
     def evaluate(self, x):
         return self.network(x)    
+    @staticmethod
+    def create_threshold_mask(weights, threshold):
+        """
+        Create a mask for weights that are above a certain absolute value threshold.
+
+        Parameters:
+        weights (Tensor): The weight tensor from a neural network layer.
+        threshold (float): The threshold value for pruning.
+
+        Returns:
+        Tensor: A boolean mask where True indicates the weight should be kept, and False indicates it should be pruned.
+        """
+        mask = torch.abs(weights) > threshold
+        return mask
+
+    
+    def apply_threshold_pruning(self, threshold):
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Linear):
+                weights = module.weight.data
+                mask_weights = self.create_threshold_mask(weights, threshold)
+                bias = module.bias.data
+                mask_bias = self.create_threshold_mask(bias, threshold)
+                prune.custom_from_mask(module, name='weight', mask=mask_weights)
+                prune.custom_from_mask(module, name='bias', mask=mask_bias)
+                #with torch.no_grad():
+                    #module.weight.data[torch.abs(module.weight) < threshold] = 0
+                    #module.bias.data[torch.abs(module.bias) < threshold] = 0
+
 
     def power_series_transformation(self, x):
         # x is the input tensor with shape [batch_size, 4] ([Re_x, dp_dx, Ma, Pr] for each sample)
@@ -58,7 +90,7 @@ class CANN(nn.Module):
         dy_deta = (coefficients * powers) @ ((eta.pow(powers - 1)).t())
         return dy_deta
 
-    def train_model(self, dataset, epochs=10000, learning_rate=1e-1, step_size=100, gamma=0.5):
+    def train_model(self, dataset, epochs=10000, learning_rate=1e-1, step_size=100, gamma=0.5, prune_iter = 1000):
         dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
         optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
@@ -72,10 +104,16 @@ class CANN(nn.Module):
                 optimizer.zero_grad()
                 predicted_dy_deta = self(physical_params, eta)
                 loss = loss_fn(predicted_dy_deta, true_dy_deta)
-                loss.backward()
+                l1_reg = sum(param.abs().sum() for param in self.parameters())
+                reg_loss = loss + self.alpha * l1_reg
+                reg_loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
             scheduler.step()  # Decay the learning rate
+
+            # check pruning req 
+            if epoch % prune_iter == 0:
+                self.apply_threshold_pruning(self.prune_threshold)
             average_loss = total_loss / len(dataloader)
             loss_history.append(average_loss) 
             print(f'Epoch {epoch+1}, Loss: {loss.item()}')
@@ -125,7 +163,11 @@ if __name__ == "__main__":
     los_history = model.train_model(dataset)
 
     trained_weights, trained_biases = model.get_weights()
-    
+    print('Trained weights:')
+    print(trained_weights)
+    print('Trained biases:')
+    print(trained_biases)
+
     # Plotting the loss history
     plt.plot(los_history)
     plt.title('Loss History')

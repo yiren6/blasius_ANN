@@ -14,13 +14,13 @@ File to evaluate the velocity field of a flow over a flat plate
 ###  Import file and extract data
 ############################################################################################################
 # define boundary conditions 
-U_INF = 1.0
+U_INF = 69.16444
 MU_CONSTANT= 1.83463e-05
 RHO = 1.13235
 NU = MU_CONSTANT / RHO
 
 # define files 
-filename = "Inc_Laminar_Flat_Plate/flow.vtu"
+filename = "Inc_Laminar_Flat_Plate/flow_comp.vtu"
 data = extract_vtu_data(filename)
 
 # extract data
@@ -34,8 +34,8 @@ temperature = data['Temperature']
 pressure_coefficient = data['Pressure_Coefficient']
 density = data['Density']
 laminar_viscosity = data['Laminar_Viscosity']
-heat_capacity = data['Heat_Capacity']
-thermal_conductivity = data['Thermal_Conductivity']
+#heat_capacity = data['Heat_Capacity']
+#thermal_conductivity = data['Thermal_Conductivity']
 skin_friction_coefficient = data['Skin_Friction_Coefficient']
 heat_flux = data['Heat_Flux']
 y_plus = data['Y_Plus']
@@ -80,7 +80,7 @@ column_end = column_start + HEIGHT
 
 # extract the velocity field at the x_index
 # for Blasius boundary layer we are only interested in u
-u = velocity[column_start:column_end, 0]
+u = velocity[column_start:column_end, 0]/U_INF
 v = velocity[column_start:column_end, 1]
 w = velocity[column_start:column_end, 2]
 
@@ -111,7 +111,7 @@ column_end = column_start + HEIGHT
 
 # extract the velocity field at the x_index
 # for Blasius boundary layer we are only interested in u
-u = velocity[column_start:column_end, 0]
+u = velocity[column_start:column_end, 0]/U_INF
 v = velocity[column_start:column_end, 1]
 w = velocity[column_start:column_end, 2]
 
