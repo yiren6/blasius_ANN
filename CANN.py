@@ -1,123 +1,127 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import StepLR
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# Assuming your data is structured as a list of tuples [(Re_x, dp_dx, Ma, Pr, eta_values, dy_deta_values), ...]
+class BoundaryLayerDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        Re_x, dp_dx, Ma, Pr, eta_values, dy_deta_values = self.data[idx]
+        physical_params = torch.tensor([Re_x, dp_dx, Ma, Pr], dtype=torch.float32)
+        eta = torch.tensor(eta_values, dtype=torch.float32)
+        dy_deta = torch.tensor(dy_deta_values, dtype=torch.float32)
+        return physical_params, eta, dy_deta
 
 class CANN(nn.Module):
-    def __init__(self, output_size, re_x, dp_dx, eta_array, learning_rate, loss_type):
+    def __init__(self):
         super(CANN, self).__init__()
-        # Define the input size based on feature the number of features we will create from the inputs
-        self.input_size = 2  #  re_x and dp_dx
-        self.hidden = nn.Linear(self.input_size, hidden_size)
-        self.output = nn.Linear(hidden_size, output_size)
-        self.re_x_powers = torch.tensor([-2, -1, -2/3, -1/2, -1/5, 0, 1/5, 1/2, 2/3, 1, 2])
-        self.dp_dx_powers = torch.tensor([-2, -1, -2/3, -1/2, -1/5, 0, 1/5, 1/2, 2/3, 1, 2])
-        self.hidden_layer_size =  self.re_x_powers.size()[0] + self.dp_dx_powers.size()[0]    #size of sel.re_x_powers
-        self.hidden = nn.Linear(self.input_size, self.hidden_layer_size)
-        self.eta_powers = torch.tensor([-12,-11,-10,-9,-8,-7,-6,-5,-4,-3,-2,-1,0,1,2,3,4,5,6,7,8,9,10,11,12])
-        self.eta_array = eta_array 
-        self.learning_rate = learning_rate
-        self.loss_type = loss_type
-        self.rex = re_x
-        self.dp_dx = dp_dx
-        # define training parameters
-        self.optimizer = optim.Adam(self.parameters(), lr=0.01, weight_decay=1e-5)
-        self.f = None
-        if self.loss_type == 'L1':
-            self.loss_function = nn.L1Loss()
-        elif self.loss_type == 'RES':
-            self.loss_function = self.gradient_loss(self.f, self.eta_array)
-        else:
-            print("Invalid loss type, please choose from 'L1' or 'RES', using MSE loss as default")
-            self.loss_function = nn.MSELoss()
+        # Define the subsequent parts of the network
+        self.network = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(36, 12), # Adjusted to take the 36 custom outputs as input
+            nn.ReLU(),
+            nn.Linear(12, 6)   # Outputting the 5 coefficients a1 to a5
+        )
 
+    def evaluate(self, x):
+        return self.network(x)    
+
+    def power_series_transformation(self, x):
+        # x is the input tensor with shape [batch_size, 4] ([Re_x, dp_dx, Ma, Pr] for each sample)
+        powers = torch.tensor([0, 1/2, 2, 1/3, 3, 1/4, 4, 1/5, 5], dtype=torch.float32, device=x.device)
+        transformed = torch.cat([x[:, i:i+1].pow(powers) for i in range(4)], dim=1)
+        return transformed
     
-    def forward(self, re_x, dp_dx, eta):
-        # Calculate the powers for Re_x and dp_dx
-        re_x_powers = torch.stack([re_x**i for i in self.re_x_powers]).t()  # .t() for transpose
-        dp_dx_powers = torch.stack([dp_dx**i for i in self.dp_dx_powers]).t()
+    def forward(self, physical_params, eta):
+        transformed_params = self.power_series_transformation(physical_params)
+        mean = transformed_params.mean()
+        std = transformed_params.std()
 
-        # Combine the two input vectors
-        combined_input = torch.cat((re_x_powers, dp_dx_powers), dim=1)
+        # Normalize the tensor
+        norm_params = (transformed_params - mean) / std
+        coefficients = self.network(norm_params)
+        eta = eta.t()
+        powers = torch.tensor([1, 2, 5, 8, 11, 14], dtype=torch.float32, device=eta.device)
+        dy_deta = (coefficients * powers) @ ((eta.pow(powers - 1)).t())
+        return dy_deta
 
-        # Pass the input through the hidden layer with an activation function, e.g., ReLU
-        hidden_output = F.relu(self.hidden(combined_input))
+    def train_model(self, dataset, epochs=1000, learning_rate=1e-1, step_size=100, gamma=0.5):
+        dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+        optimizer = optim.Adam(self.parameters(), lr=learning_rate)
+        scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
+        loss_fn = nn.L1Loss()
+        loss_history = []
 
-        # Pass the output of the hidden layer to the output layer
-        output = self.output(hidden_output)
-        
-        # Reshape eta to be able to perform broadcasting in the multiplication
-        eta = torch.tensor(eta).unsqueeze(1)  # Adding an extra dimension for broadcasting
-
-        # Assume the output represents coefficients for the polynomial terms of eta
-        # Now multiply the outputs by the eta powers
-        eta_powers = torch.stack([eta**i for i in self.eta_powers], dim=2)  # Creating a tensor of eta powers
-        final_output = (output.unsqueeze(1) * eta_powers).sum(dim=2)  # Multiply and sum across the polynomial terms
-        
-        return final_output
-    
-    def train_model(self, epochs, true_velocity_profiles, learning_rate=0.001, weight_decay=1e-5):
-        # Convert the input data to tensors
-        re_x_data = torch.tensor(self.rex, dtype=torch.float32)
-        dp_dx_data = torch.tensor(self.dp_dx, dtype=torch.float32)
-        eta_data = torch.tensor(self.eta_array, dtype=torch.float32)
-        
         for epoch in range(epochs):
-            # Zero the parameter gradients
-            self.optimizer.zero_grad()
-            
-            # Forward pass
-            predicted_velocity = self.forward(re_x_data, dp_dx_data, eta_data)
-            
-            # Compute loss
-            loss = self.loss_function(predicted_velocity, true_velocity_profiles)
-            
-            # Backward pass
-            loss.backward()
-            
-            # Update parameters
-            self.optimizer.step()
-            
-            # Optional: Print loss
-            if epoch % 100 == 0:
-                print(f'Epoch {epoch}: train loss: {loss.item()}')
-
-
-    def gradient_loss(self, f, eta):
-        # Make sure that `f` requires gradient
-        f.requires_grad_(True)
-        
-        # We assume that `f` is the result of CANN network and `eta` is the corresponding input tensor
-        # Compute the second derivative f'' with respect to eta
-        f_prime = torch.autograd.grad(f, eta, grad_outputs=torch.ones(f.shape), create_graph=True)[0]
-        f_double_prime = torch.autograd.grad(f_prime, eta, grad_outputs=torch.ones(f_prime.shape), create_graph=True)[0]
-        
-        # Compute the third derivative f''' with respect to eta
-        f_triple_prime = torch.autograd.grad(f_double_prime, eta, grad_outputs=torch.ones(f_double_prime.shape), create_graph=True)[0]
-        
-        # Now compute the custom loss term: 2*f''' + f*f''
-        loss_term = 2 * f_triple_prime + f * f_double_prime
-        
-        # You can use a standard loss function, like MSE, to compute the loss between the loss_term and zeros
-        # This effectively measures the magnitude of the loss_term, which we want to minimize
-        loss = torch.mean(loss_term ** 2)
-        
-        return loss
+            total_loss = 0
+            for physical_params, eta, true_dy_deta in dataloader:
+                optimizer.zero_grad()
+                predicted_dy_deta = self(physical_params, eta)
+                loss = loss_fn(predicted_dy_deta, true_dy_deta)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            scheduler.step()  # Decay the learning rate
+            average_loss = total_loss / len(dataloader)
+            loss_history.append(average_loss) 
+            print(f'Epoch {epoch+1}, Loss: {loss.item()}')
+        return loss_history
     
+    def eval_prediction(self, Re_x, dp_dx, Ma, Pr, eta):
+        # Assuming Re_x, dp_dx, Ma, Pr, and eta are already tensors. If not, you should convert them.
+        # true_dy_deta should also be a tensor of true values.
+        
+        physical_params = torch.stack((Re_x, dp_dx, Ma, Pr), dim=-1)
+        
+        # Disable gradient computation for prediction
+        with torch.no_grad():
+            predicted_dy_deta = self(physical_params, eta)
+        return predicted_dy_deta    
+# Example usage
+# data = [...]  # Your dataset here
+# dataset = BoundaryLayerDataset(data)
+# model = CANN()
+# model.train_model(dataset)
 
-
-# Number of neurons in the hidden layer and output size
-hidden_size = 50  # Adjust as necessary
-output_size = 13  # This should match the highest power of eta you wish to consider
-
-# Instantiate the network
-cann_network = CANN(hidden_size, output_size)
 
 # Example input tensors
-re_x = torch.tensor([1.0])  # Replace with actual value
-dp_dx = torch.tensor([-0.1])  # Replace with actual value
-eta = [0, 1, 1.5, 2, 2.3, 3, 4, 5]  # Example eta values
+re_x = torch.tensor([300.0])  # Replace with actual value
+dp_dx = torch.tensor([1.0])  # Replace with actual value
+Ma = torch.tensor([0.1])  # Replace with actual value
+Pr = torch.tensor([0.71])  # Replace with actual value
 
-# Get the predicted boundary layer velocity profile
-predicted_velocity = cann_network(re_x, dp_dx, eta)
-print(predicted_velocity)
+eta_orig = [0, 1, 1.5, 2, 2.3, 3, 4, 5, 7]  # Example eta values
+eta = [x / 10 for x in eta_orig]  # Divide each element by 10
+
+f_eta = [0, 0.2, 0.3, 0.4, 0.64, 0.8, 0.92, 0.98, 0.999]
+
+input_data = [(re_x, dp_dx, Ma, Pr, eta, f_eta)]
+dataset = BoundaryLayerDataset(input_data)
+model = CANN()
+los_history = model.train_model(dataset)
+
+# Plotting the loss history
+plt.plot(los_history)
+plt.title('Loss History')
+plt.xlabel('Epoch')
+plt.ylabel('Average Loss')
+plt.show()
+
+# plot the prediction vs true 
+predicted_dy_deta = model.eval_prediction(re_x, dp_dx, Ma, Pr, torch.tensor(eta, dtype=torch.float32).unsqueeze(0))
+plt.plot(eta_orig, f_eta, label='True')
+plt.plot(eta_orig, predicted_dy_deta.cpu().numpy().squeeze(), label='Predicted')
+plt.xlabel('$\eta$')
+plt.ylabel('$f\'(\eta)$')
+plt.legend()
+plt.show()

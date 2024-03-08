@@ -50,6 +50,18 @@ def eta(y, x):
 
 def Re(x):
     return U_INF * x / NU
+
+def blasius_expansion(eta):
+    k = 1/2
+    sigma = 0.33206
+    f = sigma/np.math.factorial(2) * eta**2 - k*sigma**2/np.math.factorial(5) * eta**5 + \
+        11*(k**2)*sigma**3/np.math.factorial(8) * eta**8 - \
+        375*(k**3)*sigma**4/np.math.factorial(11) * eta**11
+    # result is  u = df/deta
+    u = np.diff(f) / np.diff(eta)
+    # append the last value to make the length same as eta
+    u = np.append(u, 0)
+    return f
 ############################################################################################################
 ###  Evaluate the velocity field at specific x location 
 ############################################################################################################
@@ -108,9 +120,14 @@ y_val = coordinate[column_start:column_end, 1]
 x_val = coordinate[column_start:column_end, 0]
 plt.plot(u, eta(y_val,x_val[1]), 'r.')
 
+# plot analytical solution 
+eta_val = np.linspace(0, 9, 100)
+u = blasius_expansion(eta_val)
+plt.plot(u, eta_val, 'b-')
 plt.xlabel('U')
 plt.ylabel('$\eta$')
-plt.ylim(0, 9)
+plt.ylim(0, 10)
+plt.xlim(0, 1)
 plt.title('Velocity')
 plt.show()
 
