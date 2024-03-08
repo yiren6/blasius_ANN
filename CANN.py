@@ -25,13 +25,16 @@ class BoundaryLayerDataset(Dataset):
 class CANN(nn.Module):
     def __init__(self):
         super(CANN, self).__init__()
+        # access the current CUDA enviroment 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
         # Define the subsequent parts of the network
         self.network = nn.Sequential(
             nn.ReLU(),
             nn.Linear(36, 12), # Adjusted to take the 36 custom outputs as input
             nn.ReLU(),
             nn.Linear(12, 6)   # Outputting the 5 coefficients a1 to a5
-        )
+        ).to(device)
 
     def evaluate(self, x):
         return self.network(x)    
@@ -43,7 +46,7 @@ class CANN(nn.Module):
         return transformed
     
     def forward(self, physical_params, eta):
-        transformed_params = self.power_series_transformation(physical_params)
+        transformed_params = self.power_series_transformation(physical_params).to(device=self.device)
         mean = transformed_params.mean()
         std = transformed_params.std()
 
@@ -51,11 +54,11 @@ class CANN(nn.Module):
         norm_params = (transformed_params - mean) / std
         coefficients = self.network(norm_params)
         eta = eta.t()
-        powers = torch.tensor([1, 2, 5, 8, 11, 14], dtype=torch.float32, device=eta.device)
+        powers = torch.tensor([1, 2, 5, 8, 11, 14], dtype=torch.float32, device=self.device)
         dy_deta = (coefficients * powers) @ ((eta.pow(powers - 1)).t())
         return dy_deta
 
-    def train_model(self, dataset, epochs=1000, learning_rate=1e-1, step_size=100, gamma=0.5):
+    def train_model(self, dataset, epochs=10000, learning_rate=1e-1, step_size=100, gamma=0.5):
         dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
         optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
@@ -65,6 +68,7 @@ class CANN(nn.Module):
         for epoch in range(epochs):
             total_loss = 0
             for physical_params, eta, true_dy_deta in dataloader:
+                physical_params, eta, true_dy_deta = physical_params.to(self.device), eta.to(self.device), true_dy_deta.to(self.device)
                 optimizer.zero_grad()
                 predicted_dy_deta = self(physical_params, eta)
                 loss = loss_fn(predicted_dy_deta, true_dy_deta)
@@ -77,12 +81,21 @@ class CANN(nn.Module):
             print(f'Epoch {epoch+1}, Loss: {loss.item()}')
         return loss_history
     
+    def get_weights(self):
+        weights = []
+        biases = []
+        for layer in self.network:
+            if hasattr(layer, 'weight'):  # Check if the layer has the 'weight' attribute
+                weights.append(layer.weight.data.cpu().numpy())
+                biases.append(layer.bias.data.cpu().numpy())
+        return weights, biases
+    
     def eval_prediction(self, Re_x, dp_dx, Ma, Pr, eta):
         # Assuming Re_x, dp_dx, Ma, Pr, and eta are already tensors. If not, you should convert them.
         # true_dy_deta should also be a tensor of true values.
         
-        physical_params = torch.stack((Re_x, dp_dx, Ma, Pr), dim=-1)
-        
+        physical_params = torch.stack((Re_x, dp_dx, Ma, Pr), dim=-1).to(self.device)
+        eta = eta.to(self.device)
         # Disable gradient computation for prediction
         with torch.no_grad():
             predicted_dy_deta = self(physical_params, eta)
@@ -93,35 +106,38 @@ class CANN(nn.Module):
 # model = CANN()
 # model.train_model(dataset)
 
+if __name__ == "__main__":
 
-# Example input tensors
-re_x = torch.tensor([300.0])  # Replace with actual value
-dp_dx = torch.tensor([1.0])  # Replace with actual value
-Ma = torch.tensor([0.1])  # Replace with actual value
-Pr = torch.tensor([0.71])  # Replace with actual value
+    # debug script 
+    re_x = torch.tensor([300.0])  # Replace with actual value
+    dp_dx = torch.tensor([1.0])  # Replace with actual value
+    Ma = torch.tensor([0.1])  # Replace with actual value
+    Pr = torch.tensor([0.71])  # Replace with actual value
 
-eta_orig = [0, 1, 1.5, 2, 2.3, 3, 4, 5, 7]  # Example eta values
-eta = [x / 10 for x in eta_orig]  # Divide each element by 10
+    eta_orig = [0, 1, 1.5, 2, 2.3, 3, 4, 5, 7]  # Example eta values
+    eta = [x / 10 for x in eta_orig]  # Divide each element by 10
 
-f_eta = [0, 0.2, 0.3, 0.4, 0.64, 0.8, 0.92, 0.98, 0.999]
+    f_eta = [0, 0.2, 0.3, 0.4, 0.64, 0.8, 0.92, 0.98, 0.999]
 
-input_data = [(re_x, dp_dx, Ma, Pr, eta, f_eta)]
-dataset = BoundaryLayerDataset(input_data)
-model = CANN()
-los_history = model.train_model(dataset)
+    input_data = [(re_x, dp_dx, Ma, Pr, eta, f_eta)]
+    dataset = BoundaryLayerDataset(input_data)
+    model = CANN()
+    los_history = model.train_model(dataset)
 
-# Plotting the loss history
-plt.plot(los_history)
-plt.title('Loss History')
-plt.xlabel('Epoch')
-plt.ylabel('Average Loss')
-plt.show()
+    trained_weights, trained_biases = model.get_weights()
+    
+    # Plotting the loss history
+    plt.plot(los_history)
+    plt.title('Loss History')
+    plt.xlabel('Epoch')
+    plt.ylabel('Average Loss')
+    plt.show()
 
-# plot the prediction vs true 
-predicted_dy_deta = model.eval_prediction(re_x, dp_dx, Ma, Pr, torch.tensor(eta, dtype=torch.float32).unsqueeze(0))
-plt.plot(eta_orig, f_eta, label='True')
-plt.plot(eta_orig, predicted_dy_deta.cpu().numpy().squeeze(), label='Predicted')
-plt.xlabel('$\eta$')
-plt.ylabel('$f\'(\eta)$')
-plt.legend()
-plt.show()
+    # plot the prediction vs true 
+    predicted_dy_deta = model.eval_prediction(re_x, dp_dx, Ma, Pr, torch.tensor(eta, dtype=torch.float32).unsqueeze(0))
+    plt.plot(eta_orig, f_eta, label='True')
+    plt.plot(eta_orig, predicted_dy_deta.cpu().numpy().squeeze(), label='Predicted')
+    plt.xlabel('$\eta$')
+    plt.ylabel('$f\'(\eta)$')
+    plt.legend()
+    plt.show()
