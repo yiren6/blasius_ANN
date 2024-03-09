@@ -23,20 +23,40 @@ class BoundaryLayerDataset(Dataset):
         dy_deta = torch.tensor(dy_deta_values, dtype=torch.float32)
         return physical_params, eta, dy_deta
 
+def pad_sequence(sequences):
+    """Pad sequences to the same length with zeros."""
+    max_length = max([s.size(0) for s in sequences])
+    padded_sequences = torch.zeros(len(sequences), max_length)
+    for i, sequence in enumerate(sequences):
+        padded_sequences[i, :sequence.size(0)] = sequence
+    return padded_sequences
+
+def custom_collate_fn(batch):
+    # Unzip the batch
+    physical_params, eta, dy_deta = zip(*batch)
+    # Pad the eta and dy_deta sequences
+    padded_eta = pad_sequence(eta)
+    padded_dy_deta = pad_sequence(dy_deta)
+    # Stack the physical_params tensors
+    physical_params_stacked = torch.stack(physical_params)
+    return physical_params_stacked, padded_eta, padded_dy_deta
+
 class CANN(nn.Module):
     def __init__(self):
         super(CANN, self).__init__()
         self.alpha = 1e-2  # L1 regularization coefficient
-        self.prune_threshold = 1e-5  # Threshold for pruning weights
+        self.prune_threshold = 1e-3  # Threshold for pruning weights
         # access the current CUDA enviroment 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
         # Define the subsequent parts of the network
         self.network = nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(36, 12), # Adjusted to take the 36 custom outputs as input
-            nn.ReLU(),
-            nn.Linear(12, 6)   # Outputting the 5 coefficients a1 to a5
+            #nn.ReLU(),
+            nn.Tanh(),
+            nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
+            nn.Tanh(),
+            nn.Linear(32, 9),   # Outputting the 5 coefficients a1 to a5
+            nn.Linear(9, 6)     # Outputting the 5 coefficients a1 to a5
         ).to(device)
 
     def evaluate(self, x):
@@ -53,12 +73,13 @@ class CANN(nn.Module):
         Returns:
         Tensor: A boolean mask where True indicates the weight should be kept, and False indicates it should be pruned.
         """
-        mask = torch.abs(weights) > threshold
+        MAX = 1e4
+        mask = torch.logical_and(torch.abs(weights) > threshold, torch.abs(weights) < MAX)
         return mask
 
     
     def apply_threshold_pruning(self, threshold):
-        for name, module in model.named_modules():
+        for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
                 weights = module.weight.data
                 mask_weights = self.create_threshold_mask(weights, threshold)
@@ -66,14 +87,14 @@ class CANN(nn.Module):
                 mask_bias = self.create_threshold_mask(bias, threshold)
                 prune.custom_from_mask(module, name='weight', mask=mask_weights)
                 prune.custom_from_mask(module, name='bias', mask=mask_bias)
-                #with torch.no_grad():
-                    #module.weight.data[torch.abs(module.weight) < threshold] = 0
-                    #module.bias.data[torch.abs(module.bias) < threshold] = 0
+                with torch.no_grad():
+                    module.weight.data[torch.abs(module.weight) < threshold] = 0
+                    module.bias.data[torch.abs(module.bias) < threshold] = 0
 
 
     def power_series_transformation(self, x):
         # x is the input tensor with shape [batch_size, 4] ([Re_x, dp_dx, Ma, Pr] for each sample)
-        powers = torch.tensor([0, 1/2, 2, 1/3, 3, 1/4, 4, 1/5, 5], dtype=torch.float32, device=x.device)
+        powers = torch.tensor([-5, -4, -3, -2, -3/2, -1, -1/2, 0, 1/2, 2, 1/3, 3, 1/4, 4, 1/5, 5], dtype=torch.float32, device=x.device)
         transformed = torch.cat([x[:, i:i+1].pow(powers) for i in range(4)], dim=1)
         return transformed
     
@@ -85,16 +106,25 @@ class CANN(nn.Module):
         # Normalize the tensor
         norm_params = (transformed_params - mean) / std
         coefficients = self.network(norm_params)
-        eta = eta.t()
         powers = torch.tensor([1, 2, 5, 8, 11, 14], dtype=torch.float32, device=self.device)
-        dy_deta = (coefficients * powers) @ ((eta.pow(powers - 1)).t())
+        eta_samples, eta_length = eta.size()
+        dy_deta = torch.zeros(eta_samples, eta_length, device=self.device)
+        for i in range(eta_samples):
+            cur_eta = eta[i, :].unsqueeze(0)
+            cur_eta = cur_eta.t()
+            cur_coefficients = coefficients[i, :].unsqueeze(0)
+            cur_dy_deta = (cur_coefficients * powers) @ ((cur_eta.pow(powers - 1)).t())
+            dy_deta[i, :] = cur_dy_deta
+        # append all dy_deta to tensor 
+        
         return dy_deta
 
-    def train_model(self, dataset, epochs=10000, learning_rate=1e-1, step_size=100, gamma=0.5, prune_iter = 1000):
-        dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+    def train_model(self, dataset, epochs=10000, learning_rate=10e-1, step_size=500, gamma=0.4, prune_iter = 2000, to_prune=True):
+        dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=custom_collate_fn)
         optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
-        loss_fn = nn.L1Loss()
+        loss_fn1 = nn.L1Loss()
+        loss_fn2 = nn.MSELoss()
         loss_history = []
 
         for epoch in range(epochs):
@@ -103,7 +133,7 @@ class CANN(nn.Module):
                 physical_params, eta, true_dy_deta = physical_params.to(self.device), eta.to(self.device), true_dy_deta.to(self.device)
                 optimizer.zero_grad()
                 predicted_dy_deta = self(physical_params, eta)
-                loss = loss_fn(predicted_dy_deta, true_dy_deta)
+                loss = loss_fn1(predicted_dy_deta, true_dy_deta) 
                 l1_reg = sum(param.abs().sum() for param in self.parameters())
                 reg_loss = loss + self.alpha * l1_reg
                 reg_loss.backward()
@@ -112,7 +142,7 @@ class CANN(nn.Module):
             scheduler.step()  # Decay the learning rate
 
             # check pruning req 
-            if epoch % prune_iter == 0:
+            if epoch % prune_iter == 0 and to_prune:
                 self.apply_threshold_pruning(self.prune_threshold)
             average_loss = total_loss / len(dataloader)
             loss_history.append(average_loss) 
@@ -132,6 +162,12 @@ class CANN(nn.Module):
         # Assuming Re_x, dp_dx, Ma, Pr, and eta are already tensors. If not, you should convert them.
         # true_dy_deta should also be a tensor of true values.
         
+        # making sure Re_x dp_dx Ma Pr are tensors
+        Re_x = torch.tensor(Re_x, dtype=torch.float32).unsqueeze(0)
+        dp_dx = torch.tensor(dp_dx, dtype=torch.float32).unsqueeze(0)
+        Ma = torch.tensor(Ma, dtype=torch.float32).unsqueeze(0)
+        Pr = torch.tensor(Pr, dtype=torch.float32).unsqueeze(0)
+
         physical_params = torch.stack((Re_x, dp_dx, Ma, Pr), dim=-1).to(self.device)
         eta = eta.to(self.device)
         # Disable gradient computation for prediction
