@@ -57,8 +57,8 @@ class CANN(nn.Module):
             nn.Tanh(),
             nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
             nn.Tanh(),
-            nn.Linear(32, 5),   # Outputting the 5 coefficients a1 to a5
-            #nn.Linear(9, 6)     # Outputting the 5 coefficients a1 to a5
+            nn.Linear(32, 9),   # Outputting the 5 coefficients a1 to a5
+            nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
         ).to(device)
 
     def evaluate(self, x):

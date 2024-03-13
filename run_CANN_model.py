@@ -12,6 +12,32 @@ from extract_comp_info import extract_farfield_conditions
 import torch
 import datetime
 
+"""
+# 20240313-003320
+num_cv_folds = 9
+epochs = 5000
+learning_rate = 10e-1
+step_size = 500
+gamma = 0.9
+prune_iter = 500
+to_prune = True
+alpha=20e-3
+beta = 1
+prune_threshold_min=1e-3
+prune_threshold_max=1e2
+
+self.network = nn.Sequential(
+            #nn.ReLU(),
+            nn.Tanh(),
+            nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
+            nn.Tanh(),
+            nn.Linear(32, 5),   # Outputting the 5 coefficients a1 to a5
+            #nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
+        ).to(device)
+
+COMMENTS: weights are quite sparse, mainly e-x weights, loss is ~0.34
+"""
+
 # define the path to the vtu file
 current_path = os.getcwd()
 incomp_path = "Inc_Laminar_Flat_Plate/flow.vtu"
@@ -114,6 +140,8 @@ alpha=20e-3
 beta = 1
 prune_threshold_min=1e-3
 prune_threshold_max=1e2
+
+
 model = CANN(alpha=alpha, beta=beta, prune_threshold_min=prune_threshold_min, prune_threshold_max=prune_threshold_max)
 # train the model with cross validation (k-fold cross validation
 los_history, train_ave_loss, val_ave_loss = model.train_with_cross_validation(dataset, num_folds=num_cv_folds, \
@@ -136,7 +164,8 @@ np.save(f"val_ave_loss_{cur_date_time}.npy", val_ave_loss)
 # save the weights and biases
 np.save(f"trained_weights_{cur_date_time}.npy", trained_weights)
 np.save(f"trained_biases_{cur_date_time}.npy", trained_biases)
-
+# save dataset
+np.save(f"dataset.npy", dataset)
 
 # flatting loss history into 1d array 
 los_history_flatten = [item for sublist in los_history for item in sublist]
@@ -147,6 +176,7 @@ plt.title('Loss History')
 plt.xlabel('Epoch')
 plt.ylabel('Average Loss')
 plt.savefig(f"loss_history_{cur_date_time}.png")
+plt.show()
 
 # Plotting the average training and validation loss
 plt.plot(train_ave_loss, label='Training Loss')
@@ -156,6 +186,7 @@ plt.xlabel('fold')
 plt.ylabel('Average Loss')
 plt.legend()
 plt.savefig(f"train_val_loss_{cur_date_time}.png")
+plt.show()
 
 # randomly select some 5 data from the dataset to evaluate the model
 num_data = 5
@@ -169,6 +200,7 @@ plt.xlabel('$\eta$')
 plt.ylabel('$u$')
 plt.legend()
 plt.savefig(f"eval_{cur_date_time}.png")
+plt.show()    
 
 
 
