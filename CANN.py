@@ -24,7 +24,9 @@ class BoundaryLayerDataset(Dataset):
         return physical_params, eta, dy_deta
 
 def pad_sequence(sequences):
-    """Pad sequences to the same length with zeros."""
+    """
+    Pad sequences to the same length with zeros.
+    """
     max_length = max([s.size(0) for s in sequences])
     padded_sequences = torch.zeros(len(sequences), max_length)
     for i, sequence in enumerate(sequences):
@@ -32,6 +34,9 @@ def pad_sequence(sequences):
     return padded_sequences
 
 def custom_collate_fn(batch):
+    """
+    Custom collate function to pad sequences in the batch.
+    """
     # Unzip the batch
     physical_params, eta, dy_deta = zip(*batch)
     # Pad the eta and dy_deta sequences
@@ -43,6 +48,7 @@ def custom_collate_fn(batch):
 
 class CANN(nn.Module):
     def __init__(self, alpha=20e-3, beta = 1, prune_threshold_min=1e-3, prune_threshold_max=1e2):
+
         super(CANN, self).__init__()
         self.alpha = alpha  # L1 regularization strength
         self.beta = beta # L2 loss strength
@@ -80,6 +86,9 @@ class CANN(nn.Module):
 
     
     def apply_threshold_pruning(self):
+        """
+        apply threshold pruning to the weights and biases of the network
+        """
         for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
                 weights = module.weight.data
@@ -94,12 +103,18 @@ class CANN(nn.Module):
 
 
     def power_series_transformation(self, x):
+        """
+        Apply a power series transformation to the input tensor.
+        """
         # x is the input tensor with shape [batch_size, 4] ([Re_x, dp_dx, Ma, Pr] for each sample)
         powers = torch.tensor([-5, -4, -3, -2, -3/2, -1, -1/2, 0, 1/2, 2, 1/3, 3, 1/4, 4, 1/5, 5], dtype=torch.float32, device=x.device)
         transformed = torch.cat([x[:, i:i+1].pow(powers) for i in range(4)], dim=1)
         return transformed
     
     def forward(self, physical_params, eta):
+        """
+        Forward pass of the network.
+        """
         transformed_params = self.power_series_transformation(physical_params).to(device=self.device)
         mean = transformed_params.mean()
         std = transformed_params.std()
@@ -121,6 +136,10 @@ class CANN(nn.Module):
         return dy_deta
 
     def train_model(self, dataloader, epochs=10000, learning_rate=10e-1, step_size=500, gamma=0.4, prune_iter = 2000, to_prune=True):
+        """
+        Train the model on the given dataset as inner loop of k-fold cross validation.
+        """
+
         print(f"Training on {self.device}")
         optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
@@ -152,6 +171,9 @@ class CANN(nn.Module):
         return loss_history, average_loss
     
     def train_with_cross_validation(self, dataset, num_folds=5, epochs=10000, learning_rate=10e-1, step_size=500, gamma=0.4, prune_iter=2000, to_prune=True):
+        """
+        Train the model using k-fold cross validation.
+        """
         print(f"Running on {self.device}")
         fold_losses = []
         train_average_losses = []
@@ -175,15 +197,17 @@ class CANN(nn.Module):
             train_loader = DataLoader(train_set, batch_size=32, shuffle=True, collate_fn=custom_collate_fn)
             val_loader = DataLoader(val_set, batch_size=32, shuffle=False, collate_fn=custom_collate_fn)
             
-            # first 2 fold do not prune 
-            if fold < 2:
-                to_prune = False
+            # first 2 folds do not prune 
+            if fold < 2 and to_prune == True:
+                cur_to_prune = False
+            elif fold > 2 and to_prune == True:
+                cur_to_prune = True
             else:
-                to_prune = True
+                cur_to_prune = False
             # Train the model
             fold_epoches = int(np.ceil(epochs/num_folds))
-            fold_learning_rate = learning_rate * (gamma ** ((fold_epoches*fold)/step_size))
-            loss_history, avg_train_loss = self.train_model(train_loader, epochs=fold_epoches, learning_rate=fold_learning_rate, step_size=step_size, gamma=gamma, prune_iter=prune_iter, to_prune=to_prune)
+            fold_learning_rate = learning_rate * (gamma ** ((fold_epoches*fold)/step_size)) # based on total epoches of all folds
+            loss_history, avg_train_loss = self.train_model(train_loader, epochs=fold_epoches, learning_rate=fold_learning_rate, step_size=step_size, gamma=gamma, prune_iter=prune_iter, to_prune=cur_to_prune)
             fold_losses.append(loss_history)
 
             # Validate the model
@@ -210,7 +234,7 @@ class CANN(nn.Module):
         return weights, biases
     
     def eval_prediction(self, Re_x, dp_dx, Ma, Pr, eta):
-        # Assuming Re_x, dp_dx, Ma, Pr, and eta are already tensors. If not, you should convert them.
+        # Assuming Re_x, dp_dx, Ma, Pr, and eta are already tensors. 
         # true_dy_deta should also be a tensor of true values.
         
         # making sure Re_x dp_dx Ma Pr are tensors
@@ -225,19 +249,15 @@ class CANN(nn.Module):
         with torch.no_grad():
             predicted_dy_deta = self(physical_params, eta)
         return predicted_dy_deta    
-# Example usage
-# data = [...]  # Your dataset here
-# dataset = BoundaryLayerDataset(data)
-# model = CANN()
-# model.train_model(dataset)
+
 
 if __name__ == "__main__":
 
     # debug script 
-    re_x = torch.tensor([300.0])  # Replace with actual value
-    dp_dx = torch.tensor([1.0])  # Replace with actual value
-    Ma = torch.tensor([0.1])  # Replace with actual value
-    Pr = torch.tensor([0.71])  # Replace with actual value
+    re_x = torch.tensor([300.0])  
+    dp_dx = torch.tensor([1.0])  
+    Ma = torch.tensor([0.1])  
+    Pr = torch.tensor([0.71])  
 
     eta_orig = [0, 1, 1.5, 2, 2.3, 3, 4, 5, 7]  # Example eta values
     eta = [x / 10 for x in eta_orig]  # Divide each element by 10

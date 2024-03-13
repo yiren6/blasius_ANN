@@ -11,6 +11,7 @@ from eval_velocity import return_velocity
 from extract_comp_info import extract_farfield_conditions
 import torch
 import datetime
+import pickle
 
 """
 # 20240313-003320
@@ -36,6 +37,30 @@ self.network = nn.Sequential(
         ).to(device)
 
 COMMENTS: weights are quite sparse, mainly e-x weights, loss is ~0.34
+
+# 20240313-012125
+num_cv_folds = 9
+epochs = 5000
+learning_rate = 10e-1
+step_size = 500
+gamma = 0.9
+prune_iter = 500
+to_prune = True
+alpha=20e-3
+beta = 1
+prune_threshold_min=1e-3
+prune_threshold_max=1e2
+
+self.network = nn.Sequential(
+            #nn.ReLU(),
+            nn.Tanh(),
+            nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
+            nn.Tanh(),
+            nn.Linear(32, 9),   # Outputting the 5 coefficients a1 to a5
+            nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
+        ).to(device)
+COMMENTS: the loss is ~0.06 but now the weights are quite dense, in order of 10e-1, consider run prune 0.1
+
 """
 
 # define the path to the vtu file
@@ -115,7 +140,7 @@ for idx, cur_path in enumerate(comp_path):
 
 # merge two database
 input_data = all_incomp_data + all_comp_data
-input_data = all_comp_data
+#input_data = all_comp_data
 dataset = BoundaryLayerDataset(input_data)
 
 max_eta = max(max_eta_1, max_eta_2)
@@ -138,7 +163,7 @@ to_prune = True
 # define model parameters 
 alpha=20e-3
 beta = 1
-prune_threshold_min=1e-3
+prune_threshold_min=1e-1
 prune_threshold_max=1e2
 
 
@@ -162,10 +187,14 @@ np.save(f"loss_history_{cur_date_time}.npy", los_history)
 np.save(f"train_ave_loss_{cur_date_time}.npy", train_ave_loss)
 np.save(f"val_ave_loss_{cur_date_time}.npy", val_ave_loss)
 # save the weights and biases
-np.save(f"trained_weights_{cur_date_time}.npy", trained_weights)
-np.save(f"trained_biases_{cur_date_time}.npy", trained_biases)
+for i, weights in enumerate(trained_weights):
+    np.save(f"trained_weights_{cur_date_time}_{i}.npy", weights)
+for i, bias in enumerate(trained_biases):
+    np.save(f"trained_weights_{cur_date_time}_{i}.npy", bias)
+
 # save dataset
-np.save(f"dataset.npy", dataset)
+with open('dataset.pkl', 'wb') as f:
+    pickle.dump(input_data, f)
 
 # flatting loss history into 1d array 
 los_history_flatten = [item for sublist in los_history for item in sublist]
