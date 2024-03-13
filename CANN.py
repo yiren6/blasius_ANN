@@ -42,10 +42,12 @@ def custom_collate_fn(batch):
     return physical_params_stacked, padded_eta, padded_dy_deta
 
 class CANN(nn.Module):
-    def __init__(self):
+    def __init__(self, alpha=20e-3, beta = 1, prune_threshold_min=1e-3, prune_threshold_max=1e2):
         super(CANN, self).__init__()
-        self.alpha = 1e-2  # L1 regularization coefficient
-        self.prune_threshold = 1e-3  # Threshold for pruning weights
+        self.alpha = alpha  # L1 regularization strength
+        self.beta = beta # L2 loss strength
+        self.prune_threshold = prune_threshold_min  # Threshold for pruning weights
+        self.prune_threshold_max = prune_threshold_max
         # access the current CUDA enviroment 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
@@ -55,41 +57,40 @@ class CANN(nn.Module):
             nn.Tanh(),
             nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
             nn.Tanh(),
-            nn.Linear(32, 9),   # Outputting the 5 coefficients a1 to a5
-            nn.Linear(9, 6)     # Outputting the 5 coefficients a1 to a5
+            nn.Linear(32, 5),   # Outputting the 5 coefficients a1 to a5
+            #nn.Linear(9, 6)     # Outputting the 5 coefficients a1 to a5
         ).to(device)
 
     def evaluate(self, x):
         return self.network(x)    
     @staticmethod
-    def create_threshold_mask(weights, threshold):
+    def create_threshold_mask(weights, threshold_min, threshold_max):
         """
         Create a mask for weights that are above a certain absolute value threshold.
 
         Parameters:
         weights (Tensor): The weight tensor from a neural network layer.
-        threshold (float): The threshold value for pruning.
 
         Returns:
         Tensor: A boolean mask where True indicates the weight should be kept, and False indicates it should be pruned.
         """
-        MAX = 1e4
-        mask = torch.logical_and(torch.abs(weights) > threshold, torch.abs(weights) < MAX)
+        
+        mask = torch.logical_and(torch.abs(weights) > threshold_min, torch.abs(weights) < threshold_max)
         return mask
 
     
-    def apply_threshold_pruning(self, threshold):
+    def apply_threshold_pruning(self):
         for name, module in self.named_modules():
             if isinstance(module, nn.Linear):
                 weights = module.weight.data
-                mask_weights = self.create_threshold_mask(weights, threshold)
+                mask_weights = self.create_threshold_mask(weights, self.prune_threshold, self.prune_threshold_max)
                 bias = module.bias.data
-                mask_bias = self.create_threshold_mask(bias, threshold)
+                mask_bias = self.create_threshold_mask(bias, self.prune_threshold, self.prune_threshold_max)
                 prune.custom_from_mask(module, name='weight', mask=mask_weights)
                 prune.custom_from_mask(module, name='bias', mask=mask_bias)
                 with torch.no_grad():
-                    module.weight.data[torch.abs(module.weight) < threshold] = 0
-                    module.bias.data[torch.abs(module.bias) < threshold] = 0
+                    module.weight.data[torch.abs(module.weight) < self.prune_threshold] = 0
+                    module.bias.data[torch.abs(module.bias) < self.prune_threshold] = 0
 
 
     def power_series_transformation(self, x):
@@ -106,7 +107,7 @@ class CANN(nn.Module):
         # Normalize the tensor
         norm_params = (transformed_params - mean) / std
         coefficients = self.network(norm_params)
-        powers = torch.tensor([1, 2, 5, 8, 11, 14], dtype=torch.float32, device=self.device)
+        powers = torch.tensor([2, 5, 8, 11, 14], dtype=torch.float32, device=self.device)
         eta_samples, eta_length = eta.size()
         dy_deta = torch.zeros(eta_samples, eta_length, device=self.device)
         for i in range(eta_samples):
@@ -119,8 +120,8 @@ class CANN(nn.Module):
         
         return dy_deta
 
-    def train_model(self, dataset, epochs=10000, learning_rate=10e-1, step_size=500, gamma=0.4, prune_iter = 2000, to_prune=True):
-        dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=custom_collate_fn)
+    def train_model(self, dataloader, epochs=10000, learning_rate=10e-1, step_size=500, gamma=0.4, prune_iter = 2000, to_prune=True):
+        print(f"Training on {self.device}")
         optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         scheduler = StepLR(optimizer, step_size=step_size, gamma=gamma)
         loss_fn1 = nn.L1Loss()
@@ -129,11 +130,12 @@ class CANN(nn.Module):
 
         for epoch in range(epochs):
             total_loss = 0
-            for physical_params, eta, true_dy_deta in dataloader:
+            for batch_idx, (physical_params, eta, true_dy_deta) in enumerate(iter(dataloader)):
+
                 physical_params, eta, true_dy_deta = physical_params.to(self.device), eta.to(self.device), true_dy_deta.to(self.device)
                 optimizer.zero_grad()
                 predicted_dy_deta = self(physical_params, eta)
-                loss = loss_fn1(predicted_dy_deta, true_dy_deta) 
+                loss = loss_fn1(predicted_dy_deta, true_dy_deta) + self.beta * loss_fn2(predicted_dy_deta, true_dy_deta)
                 l1_reg = sum(param.abs().sum() for param in self.parameters())
                 reg_loss = loss + self.alpha * l1_reg
                 reg_loss.backward()
@@ -143,11 +145,60 @@ class CANN(nn.Module):
 
             # check pruning req 
             if epoch % prune_iter == 0 and to_prune:
-                self.apply_threshold_pruning(self.prune_threshold)
+                self.apply_threshold_pruning()
             average_loss = total_loss / len(dataloader)
             loss_history.append(average_loss) 
             print(f'Epoch {epoch+1}, Loss: {loss.item()}')
-        return loss_history
+        return loss_history, average_loss
+    
+    def train_with_cross_validation(self, dataset, num_folds=5, epochs=10000, learning_rate=10e-1, step_size=500, gamma=0.4, prune_iter=2000, to_prune=True):
+        print(f"Running on {self.device}")
+        fold_losses = []
+        train_average_losses = []
+        val_average_losses = []
+        loss_fn1 = nn.L1Loss()
+        loss_fn2 = nn.MSELoss()
+        # Split dataset into folds
+        fold_size = len(dataset) // num_folds
+        folds = [torch.utils.data.Subset(dataset, range(i * fold_size, (i + 1) * fold_size)) for i in range(num_folds)]
+
+        for fold in range(num_folds):
+            print(f"Fold {fold+1}/{num_folds}")
+
+            # Prepare data loaders for train and validation sets
+            train_indices = [i for j, fold_data in enumerate(folds) if j != fold for i in fold_data.indices]
+            val_indices = folds[fold].indices
+            train_set = torch.utils.data.Subset(dataset, train_indices)
+            val_set = torch.utils.data.Subset(dataset, val_indices)
+            
+            # Create DataLoader for train set and validation set 
+            train_loader = DataLoader(train_set, batch_size=32, shuffle=True, collate_fn=custom_collate_fn)
+            val_loader = DataLoader(val_set, batch_size=32, shuffle=False, collate_fn=custom_collate_fn)
+            
+            # first 2 fold do not prune 
+            if fold < 2:
+                to_prune = False
+            else:
+                to_prune = True
+            # Train the model
+            fold_epoches = int(np.ceil(epochs/num_folds))
+            fold_learning_rate = learning_rate * (gamma ** ((fold_epoches*fold)/step_size))
+            loss_history, avg_train_loss = self.train_model(train_loader, epochs=fold_epoches, learning_rate=fold_learning_rate, step_size=step_size, gamma=gamma, prune_iter=prune_iter, to_prune=to_prune)
+            fold_losses.append(loss_history)
+
+            # Validate the model
+            val_losses = []
+            for physical_params, eta, true_dy_deta in val_loader:
+                physical_params, eta, true_dy_deta = physical_params.to(self.device), eta.to(self.device), true_dy_deta.to(self.device)
+                predicted_dy_deta = self(physical_params, eta)
+                loss = loss_fn1(predicted_dy_deta, true_dy_deta) + loss_fn2(predicted_dy_deta, true_dy_deta)
+                val_losses.append(loss.item())
+            avg_val_loss = np.mean(val_losses)
+            print(f"Validation Loss: {avg_val_loss}")
+            train_average_losses.append(avg_train_loss)
+            val_average_losses.append(avg_val_loss)
+
+        return fold_losses, train_average_losses, val_average_losses
     
     def get_weights(self):
         weights = []
@@ -193,10 +244,13 @@ if __name__ == "__main__":
 
     f_eta = [0, 0.2, 0.3, 0.4, 0.64, 0.8, 0.92, 0.98, 0.999]
 
-    input_data = [(re_x, dp_dx, Ma, Pr, eta, f_eta)]
+    input_data = [(re_x, dp_dx, Ma, Pr, eta, f_eta),(re_x, dp_dx, Ma, Pr, eta, f_eta),(re_x, dp_dx, Ma, Pr, eta, f_eta),(re_x, dp_dx, Ma, Pr, eta, f_eta),(re_x, dp_dx, Ma, Pr, eta, f_eta)]
     dataset = BoundaryLayerDataset(input_data)
     model = CANN()
-    los_history = model.train_model(dataset)
+    #los_history = model.train_model(dataset)
+    los_history, train_average_losses, val_average_losses = model.train_with_cross_validation(dataset, num_folds=2, epochs=1000, learning_rate=10e-1, step_size=50, gamma=0.4, prune_iter=2, to_prune=False)
+    print(train_average_losses)
+    print(val_average_losses)
 
     trained_weights, trained_biases = model.get_weights()
     print('Trained weights:')
@@ -205,7 +259,8 @@ if __name__ == "__main__":
     print(trained_biases)
 
     # Plotting the loss history
-    plt.plot(los_history)
+    for fold in range(2):
+        plt.plot(los_history[fold])
     plt.title('Loss History')
     plt.xlabel('Epoch')
     plt.ylabel('Average Loss')

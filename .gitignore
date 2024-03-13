@@ -1,0 +1,5 @@
+#ignore all cfds file 
+cfds/
+#ignore temp python
+__pycache__/
+
