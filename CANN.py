@@ -97,9 +97,9 @@ class CANN(nn.Module):
                 mask_bias = self.create_threshold_mask(bias, self.prune_threshold, self.prune_threshold_max)
                 prune.custom_from_mask(module, name='weight', mask=mask_weights)
                 prune.custom_from_mask(module, name='bias', mask=mask_bias)
-                with torch.no_grad():
-                    module.weight.data[torch.abs(module.weight) < self.prune_threshold] = 0
-                    module.bias.data[torch.abs(module.bias) < self.prune_threshold] = 0
+                #with torch.no_grad():
+                #    module.weight.data[torch.abs(module.weight) < self.prune_threshold] = 0
+                #    module.bias.data[torch.abs(module.bias) < self.prune_threshold] = 0
 
 
     def power_series_transformation(self, x):

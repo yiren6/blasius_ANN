@@ -61,6 +61,27 @@ self.network = nn.Sequential(
         ).to(device)
 COMMENTS: the loss is ~0.06 but now the weights are quite dense, in order of 10e-1, consider run prune 0.1
 
+# 20240313-021258
+num_cv_folds = 9
+epochs = 5000
+learning_rate = 10e-1
+step_size = 500
+gamma = 0.9
+prune_iter = 500
+to_prune = True
+alpha=20e-3
+beta = 1
+prune_threshold_min=1e-1
+prune_threshold_max=1e2
+self.network = nn.Sequential(
+            #nn.ReLU(),
+            nn.Tanh(),
+            nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
+            nn.Tanh(),
+            nn.Linear(32, 9),   # Outputting the 5 coefficients a1 to a5
+            nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
+        ).to(device)
+COMMENTS: the loss is 0.38 but now the weights are sparse, 1, consider run prune 0.05     
 """
 
 # define the path to the vtu file
