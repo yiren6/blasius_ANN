@@ -207,11 +207,12 @@ for idx, cur_path in enumerate(comp_path):
         cur_eta_max = max(eta_comp)
         if cur_eta_max > max_eta_2:
             max_eta_2 = cur_eta_max
+        dp_dx = 1e-3    
         comp_cur_data = (re_x_comp, dp_dx, mach, PR_LAM, eta_comp, u_comp)
         all_comp_data.append(comp_cur_data)
 
 # merge two database
-input_data = all_incomp_data + all_comp_data
+input_data = all_incomp_data 
 
 #input_data = all_comp_data
 dataset = BoundaryLayerDataset(input_data)
@@ -225,17 +226,17 @@ print(f"maximum eta is {max_eta}*20, make sure smaller than 20")
 ############################################################################################################
 
 # define training params 
-num_cv_folds = 5
-epochs = 2500
+num_cv_folds = 10
+epochs = 4000
 learning_rate = 10e-1
 step_size = 250
 gamma = 0.9
 prune_iter = 200
 to_prune = True
-alpha=20e-3
-beta = 3
-prune_threshold_min=8e-3
-prune_threshold_max=1e2
+alpha= 100e-3
+beta = 10
+prune_threshold_min=1e-1
+prune_threshold_max=1e4
 
 torch.seed = 3407
 model = CANN(alpha=alpha, beta=beta, prune_threshold_min=prune_threshold_min, prune_threshold_max=prune_threshold_max)

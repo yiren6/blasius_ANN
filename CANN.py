@@ -47,7 +47,7 @@ def custom_collate_fn(batch):
     return physical_params_stacked, padded_eta, padded_dy_deta
 
 class CANN(nn.Module):
-    def __init__(self, alpha=20e-3, beta = 1, prune_threshold_min=1e-3, prune_threshold_max=1e2):
+    def __init__(self, alpha=100e-3, beta = 10, prune_threshold_min=0.01, prune_threshold_max=1e4):
 
         super(CANN, self).__init__()
         self.alpha = alpha  # L1 regularization strength
@@ -59,12 +59,11 @@ class CANN(nn.Module):
         self.device = device
         # Define the subsequent parts of the network
         self.network = nn.Sequential(
-            #nn.ReLU(),
-            nn.Tanh(),
+            nn.ReLU(),
+        #    nn.Tanh(),
             nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
-            nn.Tanh(),
             nn.Linear(32, 5)   # Outputting the 5 coefficients a1 to a5
- #           nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
+        #    nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
         ).to(device)
 
     def evaluate(self, x):
@@ -135,7 +134,7 @@ class CANN(nn.Module):
         
         return dy_deta
 
-    def train_model(self, dataloader, epochs=10000, learning_rate=10e-1, step_size=500, gamma=0.4, prune_iter = 2000, to_prune=True):
+    def train_model(self, dataloader, epochs=100, learning_rate=10e-1, step_size=50, gamma=0.5, prune_iter = 50, to_prune=True):
         """
         Train the model on the given dataset as inner loop of k-fold cross validation.
         """
@@ -258,25 +257,42 @@ class CANN(nn.Module):
 
 
 if __name__ == "__main__":
-
+    
     # debug script 
-    re_x = torch.tensor([300.0])  
-    dp_dx = torch.tensor([1.0])  
-    Ma = torch.tensor([0.1])  
-    Pr = torch.tensor([0.71])  
+    re_x = 30000
+    dp_dx = 0.001
+    Ma = 0.1
+    Pr = 0.71
 
-    eta_orig = [0, 1, 1.5, 2, 2.3, 3, 4, 5, 7]  # Example eta values
-    eta = [x / 10 for x in eta_orig]  # Divide each element by 10
+    eta_orig = [0,0.18861613758858,0.377232275177161,0.565848412765741,0.754464550354321,0.943080687942901,1.13169682553148,1.32031296312006,1.50892910070864,1.69754523829722,1.8861613758858,2.07477751347438,2.26339365106296,2.45200978865154,2.64062592624012,2.8292420638287,3.01785820141728,3.20647433900586,3.39509047659444,3.58370661418303,3.77232275177161,3.96093888936019,4.14955502694877,4.33817116453735,4.52678730212593,4.71540343971451,4.90401957730309,5.09263571489167,5.28125185248025,5.46986799006883,5.65848412765741,5.84710026524599,6.03571640283457,6.22433254042315,6.41294867801173,6.60156481560031,6.79018095318889,6.97879709077747,7.16741322836605,7.35602936595463,7.54464550354321,7.73326164113179,7.92187777872037,8.11049391630895,8.29911005389753,8.48772619148611,8.67634232907469,8.86495846666327,9.05357460425185,9.24219074184043,9.43080687942901,9.61942301701759,9.80803915460617,9.99665529219475,10.1852714297833,10.3738875673719,10.5625037049605,10.7511198425491,10.9397359801377,11.1283521177262,11.3169682553148,11.5055843929034,11.694200530492,11.8828166680806,12.0714328056691,12.2600489432577,12.4486650808463,12.6372812184349,12.8258973560235,13.014513493612,13.2031296312006,13.3917457687892,13.5803619063778,13.7689780439664,13.9575941815549,14.1462103191435,14.3348264567321,14.5234425943207,14.7120587319093,14.9006748694978,15.0892910070864,15.277907144675,15.4665232822636,15.6551394198522,15.8437555574407,16.0323716950293,16.2209878326179,16.4096039702065,16.5982201077951,16.7868362453836,16.9754523829722,17.1640685205608,17.3526846581494,17.541300795738,17.7299169333265,17.9185330709151,18.1071492085037,18.2957653460923,18.4843814836809,18.6729976212695,18.861613758858]
+    eta_orig = eta_orig[0:45]
+      # Example eta values
+    eta = [x / 9.5 for x in eta_orig]  # Divide each element by 10
 
-    f_eta = [0, 0.2, 0.3, 0.4, 0.64, 0.8, 0.92, 0.98, 0.999]
+    f_eta = [0,0.061717,0.12343,0.18505,0.24642,0.3073,0.36743,0.42646,0.48402,0.53957,0.59282,0.64337,0.69085,0.73509,0.77564,0.81152,0.84392,0.87351,0.89702,0.91842,0.93589,0.95037,0.9623,0.97165,0.97899,0.985,0.98897,0.99289,0.99472,0.99655,0.99788,0.99857,0.99926,0.99966,0.99985,1.0001,1.0002,1.0002,1.0002,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003,1.0003]
+    f_eta = f_eta[0:45]
 
     input_data = [(re_x, dp_dx, Ma, Pr, eta, f_eta),(re_x, dp_dx, Ma, Pr, eta, f_eta),(re_x, dp_dx, Ma, Pr, eta, f_eta),(re_x, dp_dx, Ma, Pr, eta, f_eta),(re_x, dp_dx, Ma, Pr, eta, f_eta)]
     dataset = BoundaryLayerDataset(input_data)
     model = CANN()
-    #los_history = model.train_model(dataset)
-    los_history, train_average_losses, val_average_losses = model.train_with_cross_validation(dataset, num_folds=2, epochs=1000, learning_rate=10e-1, step_size=50, gamma=0.4, prune_iter=2, to_prune=False)
-    print(train_average_losses)
-    print(val_average_losses)
+    train_loader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=custom_collate_fn)
+    los_history, average_loss = model.train_model(train_loader)
+    plt.plot(los_history)
+    plt.title('Loss History')
+    plt.xlabel('Epoch')
+    plt.ylabel('Average Loss')
+    plt.show()
+    print(average_loss)
+    #los_history, train_average_losses, val_average_losses = model.train_with_cross_validation(dataset, num_folds=2, epochs=1000, learning_rate=10e-1, step_size=50, gamma=0.4, prune_iter=2, to_prune=False)
+    #print(train_average_losses)
+    #print(val_average_losses)
+    # Plotting the loss history
+    #for fold in range(2):
+    #    plt.plot(los_history[fold])
+    #plt.title('Loss History')
+    #plt.xlabel('Epoch')
+    #plt.ylabel('Average Loss')
+    #plt.show()
 
     trained_weights, trained_biases = model.get_weights()
     print('Trained weights:')
@@ -284,13 +300,7 @@ if __name__ == "__main__":
     print('Trained biases:')
     print(trained_biases)
 
-    # Plotting the loss history
-    for fold in range(2):
-        plt.plot(los_history[fold])
-    plt.title('Loss History')
-    plt.xlabel('Epoch')
-    plt.ylabel('Average Loss')
-    plt.show()
+    
 
     # plot the prediction vs true 
     predicted_dy_deta = model.eval_prediction(re_x, dp_dx, Ma, Pr, torch.tensor(eta, dtype=torch.float32).unsqueeze(0))
@@ -300,3 +310,35 @@ if __name__ == "__main__":
     plt.ylabel('$f\'(\eta)$')
     plt.legend()
     plt.show()
+
+    # plot the trained weights
+    for i, layer_weights in enumerate(trained_weights):
+        plt.figure()
+        plt.hist(layer_weights.flatten(), bins=50)
+        plt.title(f'Layer {i+1} Weights')
+        plt.xlabel('Weight Value')
+        plt.ylabel('Frequency')
+        plt.show()
+
+    for i, layer_weights in enumerate(trained_weights):
+        weights_map = np.vstack(layer_weights)
+
+        plt.figure()
+        plt.imshow(weights_map, cmap='viridis')
+        plt.title(f'Layer {i+1} Weights')
+        plt.xlabel('Input Neuron')
+        plt.ylabel('Output Neuron')
+        plt.colorbar()
+        plt.show()
+    weights_map_1 = np.vstack(trained_weights[0])
+    weights_map_2 = np.vstack(trained_weights[1])
+    effective_weights = weights_map_2 @ weights_map_1
+
+    plt.figure()
+    plt.imshow(effective_weights, cmap='viridis')
+    plt.title('Effective Weights')
+    plt.xlabel('Input Neuron')
+    plt.ylabel('Output Neuron')
+    plt.colorbar()
+    plt.show()
+

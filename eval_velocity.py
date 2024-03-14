@@ -61,7 +61,7 @@ def return_velocity(WIDTH, HEIGHT, u_inf, mu, rho, vtu_data, x_index):
 
     # extract the velocity field at the x_index
     # for Blasius boundary layer we are only interested in u
-    u = velocity[column_start:column_end, 0] / u_inf
+    u = velocity[column_start:column_end, 0] / velocity[column_end, 0]
     v = velocity[column_start:column_end, 1]
     w = velocity[column_start:column_end, 2]
 
@@ -71,11 +71,11 @@ def return_velocity(WIDTH, HEIGHT, u_inf, mu, rho, vtu_data, x_index):
     my_eta = eta(y, x[1], u_inf, nu)
     
     # find portion that eta is less than 20
-    mask = my_eta < 20
+    mask = my_eta < 10
     u = u[mask]
     my_eta = my_eta[mask]
     
-    my_eta = my_eta / 20
+    my_eta = my_eta / 10
     # divide by 10 to convert to scale 
     #my_eta = my_eta / 500
 
