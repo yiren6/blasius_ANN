@@ -81,7 +81,58 @@ self.network = nn.Sequential(
             nn.Linear(32, 9),   # Outputting the 5 coefficients a1 to a5
             nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
         ).to(device)
-COMMENTS: the loss is 0.38 but now the weights are sparse, 1, consider run prune 0.05     
+COMMENTS: the loss is 0.38 but now the weights are sparse, ~1, consider run prune 0.05     
+
+
+# 24240313-114935
+num_cv_folds = 10
+epochs = 3000
+learning_rate = 20e-1
+step_size = 150
+gamma = 0.9
+prune_iter = 150
+to_prune = True
+
+# define model parameters 
+alpha=20e-3
+beta = 1
+prune_threshold_min=1e-1
+prune_threshold_max=1e2
+self.network = nn.Sequential(
+            #nn.ReLU(),
+            nn.Tanh(),
+            nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
+            nn.Tanh(),
+            nn.Linear(32, 5)   # Outputting the 5 coefficients a1 to a5
+ #           nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
+        ).to(device)
+COMMENTS: the loss is 0.38, the weights are sparse
+
+
+# 24240313-xxxxxx
+START NORMALIZING RE_X AND DP_DX
+num_cv_folds = 5
+epochs = 1600
+learning_rate = 20e-1
+step_size = 150
+gamma = 0.9
+prune_iter = 150
+to_prune = True
+
+# define model parameters 
+alpha=20e-3
+beta = 1
+prune_threshold_min=1e-1
+prune_threshold_max=1e2
+self.network = nn.Sequential(
+            #nn.ReLU(),
+            nn.Tanh(),
+            nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
+            nn.Tanh(),
+            nn.Linear(32, 5)   # Outputting the 5 coefficients a1 to a5
+ #           nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
+        ).to(device)
+
 """
 
 # define the path to the vtu file
@@ -161,6 +212,7 @@ for idx, cur_path in enumerate(comp_path):
 
 # merge two database
 input_data = all_incomp_data + all_comp_data
+
 #input_data = all_comp_data
 dataset = BoundaryLayerDataset(input_data)
 
@@ -173,21 +225,19 @@ print(f"maximum eta is {max_eta}*20, make sure smaller than 20")
 ############################################################################################################
 
 # define training params 
-num_cv_folds = 9
-epochs = 5000
+num_cv_folds = 5
+epochs = 2500
 learning_rate = 10e-1
-step_size = 500
+step_size = 250
 gamma = 0.9
-prune_iter = 500
+prune_iter = 200
 to_prune = True
-
-# define model parameters 
 alpha=20e-3
-beta = 1
-prune_threshold_min=1e-1
+beta = 3
+prune_threshold_min=8e-3
 prune_threshold_max=1e2
 
-
+torch.seed = 3407
 model = CANN(alpha=alpha, beta=beta, prune_threshold_min=prune_threshold_min, prune_threshold_max=prune_threshold_max)
 # train the model with cross validation (k-fold cross validation
 los_history, train_ave_loss, val_ave_loss = model.train_with_cross_validation(dataset, num_folds=num_cv_folds, \
@@ -225,6 +275,7 @@ plt.plot(los_history_flatten)
 plt.title('Loss History')
 plt.xlabel('Epoch')
 plt.ylabel('Average Loss')
+plt.yscale('log')
 plt.savefig(f"loss_history_{cur_date_time}.png")
 plt.show()
 
@@ -238,20 +289,21 @@ plt.legend()
 plt.savefig(f"train_val_loss_{cur_date_time}.png")
 plt.show()
 
-# randomly select some 5 data from the dataset to evaluate the model
-num_data = 5
+# randomly select some 10 data from the dataset to evaluate the model
+num_data = 10
+np.random.seed(3407)
 random_indices = np.random.choice(len(dataset), num_data, replace=False)
 for idx in random_indices:
-    re_x, dp_dx, mach, pr_lam, eta, u = dataset[idx]
+    ff_conditions, eta, u = dataset[idx]
+    re_x, dp_dx, mach, pr_lam = ff_conditions
     predicted_dy_deta = model.eval_prediction(re_x, dp_dx, mach, pr_lam, torch.tensor(eta, dtype=torch.float32).unsqueeze(0))
     plt.plot(u, eta, label=f"Ma={mach}", linestyle='--')
     plt.plot(predicted_dy_deta.cpu().detach().numpy().squeeze(), eta, label=f"Ma={mach}", linestyle='-')
-plt.xlabel('$\eta$')
-plt.ylabel('$u$')
-plt.legend()
-plt.savefig(f"eval_{cur_date_time}.png")
-plt.show()    
-
+plt.xlabel('$u$')
+plt.ylabel('$\eta$')
+plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+plt.savefig(f"test_run_samples_{cur_date_time}.png")
+plt.show()  
 
 
 
@@ -259,10 +311,29 @@ eta_orig = [0, 1, 1.5, 2, 2.3, 3, 4, 5, 7, 13]  # Example eta values
 eta = [x / 13 for x in eta_orig]  # Divide each element by 10
 
 f_eta = [0, 0.2, 0.3, 0.4, 0.64, 0.8, 0.92, 0.98, 0.989, 0.99999]
-predicted_dy_deta = model.eval_prediction(re_x_incomp, dp_dx, 0.001, PR_LAM, torch.tensor(eta, dtype=torch.float32).unsqueeze(0))
-plt.plot(eta_orig, f_eta, label='True')
-plt.plot(eta_orig, predicted_dy_deta.cpu().numpy().squeeze(), label='Predicted')
+
+re_x_incomp, _, _, _, eta_incomp, u_incomp = all_incomp_data[3]
+predicted_dy_deta = model.eval_prediction(re_x_incomp, 1e-3, 1e-3, PR_LAM, torch.tensor(eta_incomp, dtype=torch.float32).unsqueeze(0))
+plt.plot(eta_incomp, u_incomp, label='True')
+plt.plot(eta_incomp, predicted_dy_deta.cpu().numpy().squeeze(), label='Predicted')
 plt.xlabel('$\eta$')
 plt.ylabel('$f\'(\eta)$')
 plt.legend()
 plt.show()
+
+
+# set index for MA0.21 BP 97500
+index_test_run = [442, 446, 450, 454, 458, 462, 466, 470, 474]
+# evaluate the model with the test data
+for idx in index_test_run:
+    ff_conditions, eta, u = dataset[idx]
+    re_x, dp_dx, mach, pr_lam = ff_conditions
+    predicted_dy_deta = model.eval_prediction(re_x, dp_dx, mach, pr_lam, torch.tensor(eta, dtype=torch.float32).unsqueeze(0))
+    plt.plot(u, eta, label=f"True Re_x={re_x}", linestyle='--')
+    plt.plot(predicted_dy_deta.cpu().detach().numpy().squeeze(), eta, label=f"Pred Re_x={re_x}", linestyle='-')
+plt.xlabel('$u$')
+plt.ylabel('$\eta$')
+plt.title('Test run at Ma=0.21')
+plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+plt.savefig(f"test_run_fixed_{cur_date_time}.png")
+plt.show()      

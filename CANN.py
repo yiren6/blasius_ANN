@@ -63,8 +63,8 @@ class CANN(nn.Module):
             nn.Tanh(),
             nn.Linear(16*4, 32), # Adjusted to take the 36 custom outputs as input
             nn.Tanh(),
-            nn.Linear(32, 9),   # Outputting the 5 coefficients a1 to a5
-            nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
+            nn.Linear(32, 5)   # Outputting the 5 coefficients a1 to a5
+ #           nn.Linear(9, 5)     # Outputting the 5 coefficients a1 to a5
         ).to(device)
 
     def evaluate(self, x):
@@ -97,9 +97,9 @@ class CANN(nn.Module):
                 mask_bias = self.create_threshold_mask(bias, self.prune_threshold, self.prune_threshold_max)
                 prune.custom_from_mask(module, name='weight', mask=mask_weights)
                 prune.custom_from_mask(module, name='bias', mask=mask_bias)
-                #with torch.no_grad():
-                #    module.weight.data[torch.abs(module.weight) < self.prune_threshold] = 0
-                #    module.bias.data[torch.abs(module.bias) < self.prune_threshold] = 0
+                with torch.no_grad():
+                    module.weight.data[torch.abs(module.weight) < self.prune_threshold] = 0
+                    module.bias.data[torch.abs(module.bias) < self.prune_threshold] = 0
 
 
     def power_series_transformation(self, x):
@@ -174,6 +174,11 @@ class CANN(nn.Module):
         """
         Train the model using k-fold cross validation.
         """
+
+        # randomly shuffle dataset 
+        np.random.seed(3407)
+        np.random.shuffle(dataset.data)
+
         print(f"Running on {self.device}")
         fold_losses = []
         train_average_losses = []
@@ -198,15 +203,16 @@ class CANN(nn.Module):
             val_loader = DataLoader(val_set, batch_size=32, shuffle=False, collate_fn=custom_collate_fn)
             
             # first 2 folds do not prune 
-            if fold < 2 and to_prune == True:
+            if fold < 3 and to_prune == True:
                 cur_to_prune = False
-            elif fold > 2 and to_prune == True:
+            elif fold > 3 and to_prune == True:
                 cur_to_prune = True
             else:
                 cur_to_prune = False
             # Train the model
             fold_epoches = int(np.ceil(epochs/num_folds))
             fold_learning_rate = learning_rate * (gamma ** ((fold_epoches*fold)/step_size)) # based on total epoches of all folds
+            print(f"Learning rate: {fold_learning_rate}")
             loss_history, avg_train_loss = self.train_model(train_loader, epochs=fold_epoches, learning_rate=fold_learning_rate, step_size=step_size, gamma=gamma, prune_iter=prune_iter, to_prune=cur_to_prune)
             fold_losses.append(loss_history)
 
